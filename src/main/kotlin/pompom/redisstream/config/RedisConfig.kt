@@ -21,7 +21,7 @@ class RedisConfig {
     @PostConstruct
     fun startRedis() {
         try {
-
+            // 실제 redis 클러스터에 연결할때는 lettuce 설정이 필요합니다.
             redisServer = RedisServer(6379)
             redisServer?.start()
             log.info("✅ Embedded Redis started on port 6379")

@@ -1,3 +1,9 @@
 spring:
   application:
     name: redis-stream
+
+# 추가된 설정
+redis:
+  stream:
+    consumer:
+      count: 4 # 생성할 컨슈머 수
