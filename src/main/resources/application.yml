@@ -5,5 +5,18 @@ spring:
 # 추가된 설정
 redis:
   stream:
-    consumer:
-      count: 4 # 생성할 컨슈머 수
+    # MyStreamListener를 위한 설정
+    mystream:
+      key: mystream
+      group: mygroup
+      consumer:
+        count: 4
+      scheduler:
+        fixed-rate: 60000 # 1분마다 재처리 스케줄 실행
+        min-idle-time: 1m # 1분 이상 펜딩상태인 메시지를 재처리
+
+    # 예시: 나중에 다른 리스너(another)를 추가할 경우
+    # anotherstream:
+    #   key: anotherstream
+    #   group: anothergroup
+    #   ...

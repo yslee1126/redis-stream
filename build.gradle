@@ -15,6 +15,10 @@ java {
 	}
 }
 
+kotlin {
+    jvmToolchain(21)
+}
+
 configurations {
 	compileOnly {
 		extendsFrom annotationProcessor
@@ -44,6 +48,13 @@ kotlin {
 	compilerOptions {
 		freeCompilerArgs.addAll '-Xjsr305=strict'
 	}
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile) {
+    kotlinOptions {
+        jvmTarget = "21"
+        freeCompilerArgs = ["-Xjsr305=strict"]
+    }
 }
 
 tasks.named('test') {

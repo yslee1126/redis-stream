@@ -2,10 +2,12 @@ package pompom.redisstream
 
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
+import org.springframework.boot.SpringApplication
+import org.springframework.scheduling.annotation.EnableScheduling
 
 @SpringBootApplication
+@EnableScheduling
 class RedisStreamApplication
-
 fun main(args: Array<String>) {
-	runApplication<RedisStreamApplication>(*args)
+    SpringApplication.run(RedisStreamApplication::class.java, *args)
 }

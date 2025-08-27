@@ -1,6 +1,5 @@
 package pompom.redisstream.producer
 
-import org.springframework.data.redis.core.RedisTemplate
 import org.springframework.data.redis.core.StringRedisTemplate
 import org.springframework.data.redis.connection.stream.MapRecord
 import org.springframework.stereotype.Component
