@@ -4,11 +4,27 @@ Spring Boot와 Redis Stream을 사용한 메시지 스트리밍 예제 프로젝
 
 ## 실행 방법
 
+### 어플리케이션 빌드
+```bash
+./gradlew build
+```  
+
 ### 애플리케이션 실행
+```bash
+java -jar build/libs/redis-stream-0.0.1-SNAPSHOT.jar 
+```
+애플리케이션이 시작되면 내장된 Redis 서버가 자동으로 시작되고, 8080 포트에서 서비스가 실행됩니다.
+
+빌드없이 바로 실행하려면:
 ```bash
 ./gradlew bootRun
 ```
-애플리케이션이 시작되면 내장된 Redis 서버가 자동으로 시작되고, 8080 포트에서 서비스가 실행됩니다.
+
+### 어플리케이션 종료
+
+```bash
+pkill -f redis-stream
+```
 
 ## 테스트 방법
 

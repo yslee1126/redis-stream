@@ -8,11 +8,11 @@ import org.springframework.data.redis.connection.stream.Consumer
 import org.springframework.data.redis.connection.stream.StreamOffset
 import org.springframework.data.redis.connection.stream.RecordId
 import org.springframework.data.redis.stream.StreamMessageListenerContainer
+import org.springframework.data.redis.stream.Subscription
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.data.domain.Range
 import java.time.Duration
-import java.time.Instant
 
 abstract class BaseRedisStreamListener(
     private val redisTemplate: StringRedisTemplate,
@@ -32,31 +32,88 @@ abstract class BaseRedisStreamListener(
     open val schedulerConsumerName: String
         get() = "$consumerNamePrefix-scheduler"
 
+    // 각 컨슈머에 대한 구독(Subscription)을 저장하여 나중에 취소할 수 있도록 합니다.
+    private val subscriptions = mutableListOf<Subscription>()
+
 
     abstract fun handleMessage(message: MapRecord<String, String, String>)
 
     @PostConstruct
     fun startListener() {
         try {
-            // 그룹이 없는 경우 생성합니다. 스트림이 없으면 예외가 발생할 수 있습니다.
-            // 프로듀서가 먼저 메시지를 보내 스트림을 생성하는 것을 권장합니다.
+            // 스트림이 존재하지 않을 경우 `createGroup`이 실패할 수 있습니다.
+            // 이를 방지하기 위해, 스트림이 없으면 먼저 생성합니다.
+            // 가장 간단한 방법은 더미 데이터를 추가하는 것입니다.
+            if (redisTemplate.hasKey(streamKey) == false) {
+                redisTemplate.opsForStream<String, String>().add(streamKey, mapOf("init" to "true"))
+                // 스트림을 생성하기 위해 추가한 더미 데이터는 즉시 제거합니다.
+                redisTemplate.opsForStream<String, String>().trim(streamKey, 0)
+                log.info("Stream '$streamKey' did not exist. Created a new stream.")
+            }
+
+            // 이제 스트림이 존재하므로 그룹을 생성합니다.
             redisTemplate.opsForStream<String, String>().createGroup(streamKey, ReadOffset.from("0-0"), group)
-        } catch (e: Exception) {
-            log.warn("Group '$group' already exists for stream '$streamKey'. This is expected if the application has been run before.")
+            log.info("Successfully created group '$group' for stream '$streamKey'.")
+        } catch (e: org.springframework.data.redis.RedisSystemException) {
+            // 그룹이 이미 존재하면 "BUSYGROUP" 오류가 발생합니다. 이는 정상적인 상황이므로 무시합니다.
+            if (e.message?.contains("BUSYGROUP") == true) {
+                log.info("Group '$group' already exists for stream '$streamKey'. This is an expected condition.")
+            } else {
+                // 다른 Redis 오류는 심각한 문제일 수 있으므로 애플리케이션 시작을 중단합니다.
+                throw IllegalStateException("Failed to initialize Redis Stream group '$group' on stream '$streamKey'", e)
+            }
         }
 
         // `consumerCount` 만큼 컨슈머를 생성하고 등록합니다.
         for (i in 1..consumerCount) {
             val consumerName = "$consumerNamePrefix-$i"
-            streamMessageListenerContainer.receive(
+            val subscription = streamMessageListenerContainer.receive(
                 Consumer.from(group, consumerName),
                 StreamOffset.create(streamKey, ReadOffset.lastConsumed())
             ) { message: MapRecord<String, String, String> ->
                 // 메시지 처리 로직을 공통 메서드로 추출하여 재사용
                 onMessage(message, consumerName)
             }
+            subscriptions.add(subscription)
             log.info("Registered consumer '$consumerName' for stream '$streamKey' in group '$group'.")
         }
+    }
+
+    /**
+     * Redis 그룹에서 컨슈머를 제거합니다.
+     * 이 메서드는 애플리케이션 종료 시 RedisStreamShutdownHandler에 의해 호출됩니다.
+     */
+    internal fun deleteConsumersFromGroup() {
+        log.info("Deleting consumers for stream '$streamKey' and group '$group'.")
+        // StreamMessageListenerContainer의 destroy-method='stop'이 리스닝 작업 중지를 처리합니다.
+        // 여기서는 컨슈머 그룹에서 컨슈머를 명시적으로 제거합니다.
+        for (i in 1..consumerCount) {
+            val consumerName = "$consumerNamePrefix-$i"
+            try {
+                // 컨슈머 그룹에서 컨슈머를 제거합니다.
+                // deleteConsumer는 성공 여부를 Boolean으로 반환합니다 (펜딩 메시지 수가 아님).
+                val wasRemoved = redisTemplate.opsForStream<String, String>().deleteConsumer(streamKey, Consumer.from(group, consumerName))
+                if (wasRemoved == true) {
+                    log.info("Successfully removed consumer '$consumerName' from group '$group' on stream '$streamKey'.")
+                } else {
+                    log.warn("Could not remove consumer '$consumerName' from group '$group' on stream '$streamKey'. It might have already been removed.")
+                }
+            } catch (e: Exception) {
+                log.error("Error removing consumer '$consumerName' from group '$group' on stream '$streamKey'.", e)
+            }
+        }
+    }
+
+    /**
+     * 등록된 모든 컨슈머의 구독을 취소합니다.
+     * 이렇게 하면 StreamMessageListenerContainer가 더 이상 이 리스너를 위해 폴링하지 않습니다.
+     */
+    internal fun unsubscribeListeners() {
+        subscriptions.forEach { subscription ->
+            streamMessageListenerContainer.remove(subscription)
+        }
+        subscriptions.clear()
+        log.info("Unsubscribed all consumers for stream '$streamKey'.")
     }
     
     /**
