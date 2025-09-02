@@ -12,6 +12,8 @@ import org.springframework.data.redis.stream.Subscription
 import jakarta.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.data.domain.Range
+import java.net.InetAddress
+import java.util.UUID
 import java.time.Duration
 
 abstract class BaseRedisStreamListener(
@@ -30,7 +32,30 @@ abstract class BaseRedisStreamListener(
 
     // 재처리 전용 컨슈머 이름
     open val schedulerConsumerName: String
-        get() = "$consumerNamePrefix-scheduler"
+        get() = "$consumerNamePrefix-$hostname-scheduler"
+
+    // Pod/인스턴스 별로 고유한 이름을 생성하기 위해 hostname을 사용합니다.
+    private val hostname: String by lazy {
+        // 1. Kubernetes/Linux 환경에서 가장 신뢰할 수 있는 HOSTNAME 환경 변수를 먼저 시도합니다.
+        System.getenv("HOSTNAME")?.takeIf { it.isNotBlank() }?.let {
+            log.info("Using hostname from HOSTNAME environment variable: $it")
+            return@lazy it.replace(".", "-")
+        }
+
+        // 2. 환경 변수가 없을 경우(예: 로컬 개발 환경), Java의 InetAddress를 통한 조회를 시도합니다.
+        try {
+            val inetHostname = InetAddress.getLocalHost().hostName
+            log.info("Using hostname from InetAddress.getLocalHost(): $inetHostname")
+            return@lazy inetHostname.replace(".", "-")
+        } catch (e: Exception) {
+            log.warn("Could not determine hostname from InetAddress, will fall back to UUID.", e)
+        }
+
+        // 3. 위 방법들이 모두 실패할 경우, 충돌 방지를 위해 랜덤 UUID를 사용합니다.
+        val randomId = UUID.randomUUID().toString().substring(0, 8)
+        log.warn("Hostname could not be determined. Using a random UUID as fallback: $randomId")
+        randomId
+    }
 
     // 각 컨슈머에 대한 구독(Subscription)을 저장하여 나중에 취소할 수 있도록 합니다.
     private val subscriptions = mutableListOf<Subscription>()
@@ -66,7 +91,7 @@ abstract class BaseRedisStreamListener(
 
         // `consumerCount` 만큼 컨슈머를 생성하고 등록합니다.
         for (i in 1..consumerCount) {
-            val consumerName = "$consumerNamePrefix-$i"
+            val consumerName = "$consumerNamePrefix-$hostname-$i"
             val subscription = streamMessageListenerContainer.receive(
                 Consumer.from(group, consumerName),
                 StreamOffset.create(streamKey, ReadOffset.lastConsumed())
@@ -88,7 +113,7 @@ abstract class BaseRedisStreamListener(
         // StreamMessageListenerContainer의 destroy-method='stop'이 리스닝 작업 중지를 처리합니다.
         // 여기서는 컨슈머 그룹에서 컨슈머를 명시적으로 제거합니다.
         for (i in 1..consumerCount) {
-            val consumerName = "$consumerNamePrefix-$i"
+            val consumerName = "$consumerNamePrefix-$hostname-$i"
             try {
                 // 컨슈머 그룹에서 컨슈머를 제거합니다.
                 // deleteConsumer는 성공 여부를 Boolean으로 반환합니다 (펜딩 메시지 수가 아님).
@@ -127,7 +152,7 @@ abstract class BaseRedisStreamListener(
             handleMessage(message)
 
             redisTemplate.opsForStream<String, String>()
-                .acknowledge(streamKey, group, message.id) // Not enough information to infer type variable HK
+                .acknowledge(streamKey, group, message.id) 
             redisTemplate.opsForStream<String, String>()
                 .delete(streamKey, message.id)
 

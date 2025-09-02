@@ -24,7 +24,8 @@ class RedisStreamShutdownHandler(
      * Application context가 종료될 때 호출됩니다.
      * 등록된 모든 BaseRedisStreamListener의 stopListener()를 호출하여
      * Redis 컨슈머를 안전하게 정리합니다.
-     *
+     * 테스트 결과 쿠버네티스에서는 이 부분이 동작하지 않을 수 있다 컨슈머 삭제를 다른곳에서 처리해야 한다 
+     * 일단 로컬 테스트를 위해 이 로직은 남겨둔다 
      * @param event 컨텍스트 종료 이벤트
      */
     override fun onApplicationEvent(event: ContextClosedEvent) {
