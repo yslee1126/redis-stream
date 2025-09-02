@@ -53,20 +53,19 @@ class RedisConfig {
         return executor
     }
 
-    @Bean(initMethod = "start", destroyMethod = "stop")
+    @Bean(initMethod = "start") // destroy 는 다른 곳에서 stop 으로 처리
     fun streamMessageListenerContainer(
         connectionFactory: RedisConnectionFactory,
         streamListenerExecutor: ThreadPoolTaskExecutor
     ): StreamMessageListenerContainer<String, MapRecord<String, String, String>> {
         val options = StreamMessageListenerContainer.StreamMessageListenerContainerOptions
             .builder()
-            .pollTimeout(Duration.ofMillis(500))
+            .pollTimeout(Duration.ofMillis(500)) // 너무 짧으면 안됨, 특히 lettuce timeout 보다는 길어야함 
             .batchSize(1) // 필요에 따라 배치 크기 조절
             .executor(streamListenerExecutor)
             .errorHandler { e -> log.error("Redis Stream Listener Error", e) }
             .build()
 
-        log.info("✅ StreamMessageListenerContainer created")
         return StreamMessageListenerContainer.create(connectionFactory, options)
     }
 }
