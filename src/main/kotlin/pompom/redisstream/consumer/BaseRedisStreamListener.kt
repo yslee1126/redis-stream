@@ -148,6 +148,8 @@ abstract class BaseRedisStreamListener(
         val logPrefix = "[${this::class.simpleName}][$consumerName]"
         log.info("$logPrefix Consumed: ${message.value}")
 
+        // 재처리시 기준이되는 펜딩 idle time 이 있는데 이 로직은 그 시간안에 처리되어야 한다. 그 기준을 공통으로 변수 처리해야한다 
+
         try {
             handleMessage(message)
 

@@ -24,7 +24,6 @@ class MyStreamListener(
     @Value("\${redis.stream.mystream.group}")
     override val group: String = "mygroup"
     
-    // consumerName 대신 prefix와 count를 사용합니다.
     override val consumerNamePrefix = "consumer"
 
     // application.yml에서 값을 주입받아 컨슈머 수를 동적으로 설정합니다.
