@@ -1,23 +1,23 @@
 package pompom.redisstream.config
 
+import org.slf4j.LoggerFactory
 import org.springframework.data.redis.core.StringRedisTemplate
-import org.springframework.data.redis.stream.StreamMessageListenerContainer
-import org.springframework.data.redis.connection.stream.MapRecord
 import org.springframework.stereotype.Component
 import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.data.redis.connection.stream.Consumer
 import org.springframework.data.redis.connection.stream.RecordId
+import org.springframework.data.redis.connection.stream.StreamInfo
 import org.springframework.data.domain.Range
+import org.springframework.data.redis.core.StreamOperations
 import pompom.redisstream.consumer.BaseRedisStreamListener
 
 @Component
 class RedisStreamConsumerCleaner(
     private val redisTemplate: StringRedisTemplate,
     private val streamLiseners: List<BaseRedisStreamListener>,
-    private val streamMessageListenerContainer: StreamMessageListenerContainer<String, MapRecord<String, String, String>>
 ) {
 
-    private val log = org.slf4j.LoggerFactory.getLogger(RedisStreamConsumerCleaner::class.java)
+    private val log = LoggerFactory.getLogger(RedisStreamConsumerCleaner::class.java)
 
     private val CONSUMER_ALIVE_TIME : Long = 180_000
 
@@ -45,46 +45,59 @@ class RedisStreamConsumerCleaner(
                 if (idleTimeMs > CONSUMER_ALIVE_TIME) {
                     log.warn("Consumer '$consumerName' is considered dead (idle time: $idleTimeMs ms)")
                     if (pendingMessageCount > 0) {
-                        log.info("Reprocessing pending messages for consumer '$consumerName'")
-                        // 해당 컨슈머의 모든 펜딩 메시지를 가져옴
-                        val pendingMessages = opsForStream.pending(
+                        reclaimMessagesFromDeadConsumer(
+                            opsForStream,
                             streamName,
-                            Consumer.from(groupName, consumerName),
-                            Range.unbounded<RecordId>(),
-                            pendingMessageCount
+                            groupName,
+                            consumerName,
+                            pendingMessageCount,
+                            consumers.toList() // Consumers를 List로 변환하여 전달
                         )
-
-                        // 현재 소비자를 제외하고, idle 시간이 3분(180,000ms) 이내인 첫 번째 활성 소비자 선택
-                        val otherConsumer = consumers.firstOrNull { it.consumerName() != consumerName && it.idleTimeMs() <= CONSUMER_ALIVE_TIME }
-                        if (otherConsumer != null) {
-                            log.info("Reprocessing pending messages for consumer '${otherConsumer.consumerName()}'")
-                            pendingMessages.forEach { message ->
-                                val claimedMessages = opsForStream.claim(
-                                    streamName,
-                                    groupName,
-                                    otherConsumer.consumerName(),
-                                    message.elapsedTimeSinceLastDelivery,
-                                    message.id
-                                )
-
-                                // 메세지 동시 처리 문제 
-                                claimedMessages.forEach { claimMessage ->
-                                    log.info("Claimed message ${claimMessage.id} for consumer '${otherConsumer.consumerName()}'")
-                                    listener.onMessage(claimMessage, otherConsumer.consumerName())
-                                }
-                            }
-                        } else {
-                            log.warn("No active consumers (idle time <= 180,000ms) available to reprocess messages for '$consumerName'")
-                        }
-
                     } 
 
                     // 펜딩 메세지도 처리했으니 컨슈머를 지우자
-                    opsForStream.deleteConsumer(streamName, Consumer.from(consumer.groupName(), consumer.consumerName()))
+                    val wasRemoved = opsForStream.deleteConsumer(streamName, Consumer.from(groupName, consumerName))
+                    if (wasRemoved == true) {
+                        log.info("Successfully deleted dead consumer '$consumerName' from group '$groupName'.")
+                    } else {
+                        log.warn("Could not delete consumer '$consumerName'. It might have been already removed.")
+                    }
                 }
 
             }
         }
 
+    }
+
+    private fun reclaimMessagesFromDeadConsumer(
+        opsForStream: StreamOperations<String, String, String>,
+        streamName: String,
+        groupName: String,
+        deadConsumerName: String,
+        pendingMessageCount: Long,
+        allConsumersInGroup: (Mutable)List<StreamInfo.XInfoConsumer!>!
+    ) {
+        log.info("Reclaiming pending messages for dead consumer '$deadConsumerName'")
+
+        // 죽은 컨슈머의 모든 펜딩 메시지를 가져옴
+        val pendingMessages = opsForStream.pending(
+            streamName,
+            Consumer.from(groupName, deadConsumerName),
+            Range.unbounded<RecordId>(),
+            pendingMessageCount
+        )
+
+        // 죽은 컨슈머를 제외하고, idle 시간이 기준치 이내인 첫 번째 활성 컨슈머를 찾음
+        val activeConsumer = allConsumersInGroup.firstOrNull { it.consumerName() != deadConsumerName && it.idleTimeMs() <= CONSUMER_ALIVE_TIME }
+
+        if (activeConsumer != null) {
+            val activeConsumerName = activeConsumer.consumerName()
+            log.info("Reassigning ${pendingMessages.size()} pending messages to active consumer '$activeConsumerName'")
+            pendingMessages.forEach { message ->
+                opsForStream.claim(streamName, groupName, activeConsumerName, java.time.Duration.ZERO, message.id)
+            }
+        } else {
+            log.warn("No active consumers found to reprocess messages for dead consumer '$deadConsumerName'")
+        }
     }
 }
